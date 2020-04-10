@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import torch
+import logging
 import sys
 import sagemaker_containers
 import torch.optim as optim
@@ -11,7 +12,11 @@ import torchvision
 from torchvision import datasets, models, transforms
 
 vgg19_b = torchvision.models.vgg19_bn(pretrained=True)
-# imports the model in model.py by name
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+logger.addHandler(logging.StreamHandler(sys.stdout))
+
 from model import VGG19
 
 def model_fn(model_dir):
@@ -30,7 +35,7 @@ def model_fn(model_dir):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = VGG19(model_info['output_dim'])
 
-    # Load the stored model parameters.
+    # Loading the stored model parameters.
     model_path = os.path.join(model_dir, 'model.pth')
     with open(model_path, 'rb') as f:
         model.load_state_dict(torch.load(f))
@@ -41,15 +46,10 @@ def model_fn(model_dir):
     print("Done loading model.")
     return model
 
-# Gets training data in batches from the train.csv file
+# Gets training data in batches from S3
 def _get_train_data_loader(batch_size, training_dir):
     print("Get train data loader.")
     num_workers = 0
-
-#     train_data = pd.read_csv(os.path.join(training_dir, "train.csv"), header=None, names=None)
-
-#     train_y = torch.from_numpy(train_data[[0]].values).float().squeeze()
-#     train_x = torch.from_numpy(train_data.drop([0], axis=1).values).float()
 
     image_transformer = transforms.Compose([transforms.Resize((224, 224)), transforms.ToTensor()])
     train_data = datasets.ImageFolder(training_dir, transform=image_transformer)
@@ -61,7 +61,6 @@ def _get_train_data_loader(batch_size, training_dir):
     return train_loader
 
 
-# Provided training function
 def train(model, train_loader, epochs, criterion, optimizer, device):
     """
     This is the training method that is called by the PyTorch training script. The parameters
@@ -78,14 +77,13 @@ def train(model, train_loader, epochs, criterion, optimizer, device):
     for param in vgg19_b.features.parameters():
         param.requires_grad=False
         
-    # training loop is provided
     for epoch in range(1, epochs + 1):
-        model.train() # Make sure that the model is in training mode.
+        model.train() # Making sure that the model is in training mode.
 
         total_loss = 0
 
         for batch, (data, label) in enumerate(train_loader):
-            # get data
+            # getting the data
             batch_x = data.to(device)
             batch_y = label.to(device)
 
@@ -102,13 +100,9 @@ def train(model, train_loader, epochs, criterion, optimizer, device):
             total_loss += loss.data.item()
             
             if batch % 20 == 19:
-                print("Epoch {} : Batch {} : Train Batch Loss: {}".format(epoch,batch+1, total_loss/20))
+                logger.info("Epoch {} : Batch {} : Train Batch Loss: {}".format(epoch,batch+1, total_loss/20))
                 total_loss = 0.0
 
-#         print("Epoch: {}, Loss: {}".format(epoch, total_loss / len(train_loader)))
-
-
-## TODO: Complete the main code
 if __name__ == '__main__':
     
     # All of the model parameters and training parameters are sent as arguments
@@ -117,8 +111,6 @@ if __name__ == '__main__':
     # Here we set up an argument parser to easily access the parameters
     parser = argparse.ArgumentParser()
 
-    # SageMaker parameters, like the directories for training data and saving models; set automatically
-    # Do not need to change
     parser.add_argument('--output-data-dir', type=str, default=os.environ['SM_OUTPUT_DATA_DIR'])
     parser.add_argument('--model-dir', type=str, default=os.environ['SM_MODEL_DIR'])
     parser.add_argument('--data-dir', type=str, default=os.environ['SM_CHANNEL_TRAIN'])
@@ -126,17 +118,11 @@ if __name__ == '__main__':
     # Training Parameters, given
     parser.add_argument('--batch-size', type=int, default=20, metavar='N',
                         help='input batch size for training (default: 20)')
-    parser.add_argument('--epochs', type=int, default=10, metavar='N',
-                        help='number of epochs to train (default: 10)')
+    parser.add_argument('--epochs', type=int, default=4, metavar='N',
+                        help='number of epochs to train (default: 4)')
     parser.add_argument('--seed', type=int, default=1, metavar='S',
                         help='random seed (default: 1)')
     
-    ## TODO: Add args for the three model parameters: input_features, hidden_dim, output_dim
-    # Model Parameters
-#     parser.add_argument('--hidden_dim', type=int, default=100, metavar='H', 
-#                         help="hidden dimension (default: 100)")
-#     parser.add_argument('--input_features', type=int, default=7, metavar='I',
-#                         help = 'input dimension (default: 7)')
     parser.add_argument('--output_dim', type=int, default=3, metavar='O', 
                         help = 'output dimension (default: 3)')
     
@@ -151,32 +137,23 @@ if __name__ == '__main__':
     # Load the training data.
     train_loader = _get_train_data_loader(args.batch_size, args.data_dir)
 
-    ## --- Your code here --- ##
-    
-    ## TODO:  Build the model by passing in the input params
-    # To get params from the parser, call args.argument_name, ex. args.epochs or ards.hidden_dim
-    # Don't forget to move your model .to(device) to move to GPU , if appropriate
     model = VGG19(args.output_dim).to(device)
 
 #     Defining an optimizer and loss function for training
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(vgg19_b.classifier.parameters(), lr=0.001)
+#     optimizer = optim.SGD(vgg19_b.classifier.parameters(), lr=0.001)
+    optimizer = optim.SGD(model.parameters(), lr=0.001)
 
     # Trains the model (given line of code, which calls the above training function)
     train(model, train_loader, args.epochs, criterion, optimizer, device)
 
-    ## TODO: complete in the model_info by adding three argument names, the first is given
-    # Keep the keys of this dictionary as they are 
     model_info_path = os.path.join(args.model_dir, 'model_info.pth')
     with open(model_info_path, 'wb') as f:
         model_info = {
-#             'input_features': args.input_features,
-#             'hidden_dim': args.hidden_dim,
             'output_dim': args.output_dim,
         }
         torch.save(model_info, f)
         
-    ## --- End of your code  --- ##
     
 
 	# Save the model parameters
