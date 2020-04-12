@@ -15,10 +15,12 @@ class VGG19(nn.Module):
         vgg19.classifier.add_module(module = nn.ReLU(inplace=True), name = '7')
         vgg19.classifier.add_module(module = nn.Dropout(p=0.5, inplace=False), name='8')
         vgg19.classifier.add_module(module= nn.Linear(in_features = in_f, out_features = len(classes), bias=True), name='9')
-      
+        
     
         self.model = vgg19
 
     def forward(self, x):
         x = self.model(x)
         return x
+    
+        
