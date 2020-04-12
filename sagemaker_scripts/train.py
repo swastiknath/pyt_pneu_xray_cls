@@ -47,19 +47,41 @@ def model_fn(model_dir):
     return model
 
 # Gets training data in batches from S3
-def _get_train_data_loader(batch_size, training_dir):
+def _get_train_data_loader(batch_size, training_dir, valid_dir):
     print("Get train data loader.")
     num_workers = 0
 
     image_transformer = transforms.Compose([transforms.Resize((224, 224)), transforms.ToTensor()])
     train_data = datasets.ImageFolder(training_dir, transform=image_transformer)
+    test_data = datasets.ImageFolder(valid_dir, transform=image_transformer)
     train_loader = torch.utils.data.DataLoader(train_data, 
                                            batch_size=batch_size, 
                                            num_workers=num_workers, 
                                            shuffle=True)
+    test_loader = torch.utils.data.DataLoader(test_data, 
+                                           batch_size=batch_size, 
+                                           num_workers=num_workers, 
+                                           shuffle=True)
 
-    return train_loader
+    return train_loader, test_loader
 
+def test(model, test_loader, device, criterion):
+    model.eval()
+    test_loss = 0
+    correct = 0
+    with torch.no_grad():
+        for data, target in test_loader:
+            data, target = data.to(device), target.to(device)
+            output = model(data)
+            test_loss += criterion(output, target).item()  # sum up batch loss
+            pred = output.max(1, keepdim=True)[1]  # get the index of the max log-probability
+            correct += pred.eq(target.view_as(pred)).sum().item()
+
+    test_loss /= len(test_loader.dataset)
+    logger.info('Test set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
+        test_loss, correct, len(test_loader.dataset),
+        100. * correct / len(test_loader.dataset)))
+    
 
 def train(model, train_loader, epochs, criterion, optimizer, device):
     """
@@ -72,17 +94,13 @@ def train(model, train_loader, epochs, criterion, optimizer, device):
     optimizer    - The optimizer to use during training.
     device       - Where the model and data should be loaded (gpu or cpu).
     """
-    
-    
-    for param in vgg19_b.features.parameters():
-        param.requires_grad=False
         
     for epoch in range(1, epochs + 1):
         model.train() # Making sure that the model is in training mode.
 
         total_loss = 0
 
-        for batch, (data, label) in enumerate(train_loader):
+        for batch_idx, (data, label) in enumerate(train_loader):
             # getting the data
             batch_x = data.to(device)
             batch_y = label.to(device)
@@ -99,9 +117,12 @@ def train(model, train_loader, epochs, criterion, optimizer, device):
             
             total_loss += loss.data.item()
             
-            if batch % 20 == 19:
-                logger.info("Epoch {} : Batch {} : Train Batch Loss: {}".format(epoch,batch+1, total_loss/20))
+            if batch_idx % 20 == 19:
+                logger.info('Train Epoch: {} [{}/{} ({:.0f}%)] Loss: {:.6f}'.format(
+                    epoch, batch_idx * len(data), len(train_loader.sampler),
+                    100. * batch_idx / len(train_loader), loss.item()))
                 total_loss = 0.0
+    test(model, test_loader, device, criterion)
 
 if __name__ == '__main__':
     
@@ -114,7 +135,7 @@ if __name__ == '__main__':
     parser.add_argument('--output-data-dir', type=str, default=os.environ['SM_OUTPUT_DATA_DIR'])
     parser.add_argument('--model-dir', type=str, default=os.environ['SM_MODEL_DIR'])
     parser.add_argument('--data-dir', type=str, default=os.environ['SM_CHANNEL_TRAIN'])
-    
+    parser.add_argument('--valid-dir', type=str, default=os.environ['SM_CHANNEL_VALIDATION'])
     # Training Parameters, given
     parser.add_argument('--batch-size', type=int, default=20, metavar='N',
                         help='input batch size for training (default: 20)')
@@ -125,6 +146,8 @@ if __name__ == '__main__':
     
     parser.add_argument('--output_dim', type=int, default=3, metavar='O', 
                         help = 'output dimension (default: 3)')
+    parser.add_argument('--lr', type=float, default=0.001, metavar='L', 
+                        help = 'Learning Rate (default: 0.001)')
     
     # args holds all passed-in arguments
     args = parser.parse_args()
@@ -135,14 +158,14 @@ if __name__ == '__main__':
     torch.manual_seed(args.seed)
 
     # Load the training data.
-    train_loader = _get_train_data_loader(args.batch_size, args.data_dir)
+    train_loader, test_loader = _get_train_data_loader(args.batch_size, args.data_dir, args.valid_dir)
 
     model = VGG19(args.output_dim).to(device)
 
 #     Defining an optimizer and loss function for training
     criterion = nn.CrossEntropyLoss()
 #     optimizer = optim.SGD(vgg19_b.classifier.parameters(), lr=0.001)
-    optimizer = optim.SGD(model.parameters(), lr=0.001)
+    optimizer = optim.SGD(model.parameters(), lr=args.lr)
 
     # Trains the model (given line of code, which calls the above training function)
     train(model, train_loader, args.epochs, criterion, optimizer, device)
