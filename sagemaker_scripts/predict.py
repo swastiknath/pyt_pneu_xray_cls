@@ -6,9 +6,8 @@ from PIL import Image
 import numpy as np
 import io
 # import model from model.py, by name
-from model_resnet import Resnet
+from model_resnet import Resnet 
 
-# default content type is numpy array
 NP_CONTENT_TYPE = 'application/x-image'
 ACCEPT_TYPE='application/json'
 
@@ -44,9 +43,10 @@ def model_fn(model_dir):
 def input_fn(request_body, content_type):
     if content_type == 'application/x-image':
         img_array = np.array(Image.open(io.BytesIO(request_body)))
-        img = Image.fromarray(img_arr.astype('uint8'))
-        img_transformer = transforms.compose([transforms.Resize((224,224)), transforms.ToTensor()])
-        img_tens = img_transformer(img)
+        img_transformer = transforms.Compose([transforms.ToPILImage(),
+                                              transforms.Resize((224,224)), 
+                                              transforms.ToTensor()])
+        img_tens = img_transformer(img_array)
         return img_tens
     raise Exception('Requested unsupported ContentType in content_type: ' + content_type)
 
@@ -64,7 +64,7 @@ def predict_fn(input_data, model):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.eval()
     # Process input_data so that it is ready to be sent to our model.
-    pred = model(input_data.to(device))
+    pred = model(input_data.to(device).unsqueeze(0))
     pred = pred.numpy()
     result['output'] = pred
     return result
